@@ -39,11 +39,19 @@ def build_corpus_index(path):
                 documents.append(Document(page_content=chunk, metadata={"source": file}))
     return documents
 
+## Function to embed documents and save the index
+def embed_and_save_index(documents):
+    embedder = OpenAIEmbeddings()
+    print("Embedding corpus...")
+    vectorstore = FAISS.from_documents(documents, OpenAIEmbeddings())
+    vectorstore.save_local(INDEX_DIR)
+    print("✅ Saved index to corpus_index/")
 
 ## Main function to build the corpus index
 def main():
     path = r'C:\Users\vazimi\Desktop\Sandbox\ADLM-2025-Data-Challenge'
     documents=build_corpus_index(path)
+    embed_and_save_index()
 
 if __name__ == "__main__":
     main()
