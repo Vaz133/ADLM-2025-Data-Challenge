@@ -51,7 +51,7 @@ def embed_and_save_index(documents):
 def main():
     path = r'C:\Users\vazimi\Desktop\Sandbox\ADLM-2025-Data-Challenge'
     documents=build_corpus_index(path)
-    embed_and_save_index()
+    embed_and_save_index(documents)
 
 if __name__ == "__main__":
     main()
