@@ -22,6 +22,13 @@ from langchain.chains import RetrievalQA
 from langchain.docstore.document import Document
 from dotenv import load_dotenv, find_dotenv
 
+## Config
+ENV_PATH = ".env"            # fixed path to env file
+CORPUS_INDEX = "corpus_index"  # folder produced by corpus builder
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 50
+MIN_CHARS = 20
+
 # Streamlit page config
 st.set_page_config(page_title="📚 PDF Q&A App", layout="centered")
 st.title("📚 Ask Questions About Your PDFs")
@@ -30,17 +37,14 @@ st.title("📚 Ask Questions About Your PDFs")
 default_env_path = "."
 
 # Load .env
-if os.path.exists(default_env_path):
-    load_dotenv(dotenv_path=default_env_path)
-    user_api_key = os.getenv("OPENAI_API_KEY")
-    if not user_api_key:
-        st.error("⚠️ .env file found, but `OPENAI_API_KEY` is missing.")
-        st.stop()
-    else:
-        st.success("✅ Loaded OpenAI API key from .env")
-else:
-    st.error(f"❌ .env file not found at: `{default_env_path}`")
+if os.path.exists(ENV_PATH):
+    load_dotenv(ENV_PATH)
+user_api_key = os.getenv("OPENAI_API_KEY")
+if not user_api_key:
+    st.error(f"OPENAI_API_KEY not found. Ensure `{ENV_PATH}` exists with your key.")
     st.stop()
+else:
+    st.success("✅ OpenAI API key loaded from .env")
     
 ## Load Pretrained Corpus Index
 st.markdown("### 📚 Step 2: Loading pre-trained PDF corpus...")
@@ -81,14 +85,13 @@ if uploaded_pdf:
             st.stop()
 
         # 2) Split to chunks
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         chunks = splitter.split_documents(pages)
 
         # 3) Filter out empty/whitespace chunks
         chunks = [d for d in chunks if d.page_content and d.page_content.strip()]
 
         # Optional: enforce a minimum size to avoid junk fragments
-        MIN_CHARS = 20
         chunks = [d for d in chunks if len(d.page_content.strip()) >= MIN_CHARS]
 
         # 4) Guard: if still empty, explain likely cause (scanned PDF)
