@@ -33,9 +33,6 @@ MIN_CHARS = 20
 st.set_page_config(page_title="📚 PDF Q&A App", layout="centered")
 st.title("📚 Ask Questions About Your PDFs")
 
-# --- Automatically load .env from a fixed path ---
-default_env_path = "."
-
 # Load .env
 if os.path.exists(ENV_PATH):
     load_dotenv(ENV_PATH)
@@ -46,104 +43,108 @@ if not user_api_key:
 else:
     st.success("✅ OpenAI API key loaded from .env")
     
-## Load Pretrained Corpus Index
-st.markdown("### 📚 Step 2: Loading pre-trained PDF corpus...")
-CORPUS_INDEX = "corpus_index"
-
-@st.cache_resource
-def load_corpus_index(api_key):
-    embeddings = OpenAIEmbeddings(openai_api_key=api_key)
-    return FAISS.load_local(CORPUS_INDEX, embeddings, allow_dangerous_deserialization=True)
-
-try:
-    corpus_vectorstore = load_corpus_index(user_api_key)
-    st.success("✅ Corpus loaded.")
-except Exception as e:
-    st.error(f"❌ Failed to load prebuilt index: {e}")
-    st.stop()
+# Shared embeddings + LLM
+embeddings = OpenAIEmbeddings(openai_api_key=user_api_key)
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, openai_api_key=user_api_key)
     
-## Optional PDF Upload
-st.markdown("### 📄 Step 3 (Optional): Upload your own PDF to include in Q&A")
-uploaded_pdf = st.file_uploader("Upload a PDF", type="pdf")
+# Sidebar: all data-source UI
+st.sidebar.header("Data source")
+data_source = st.sidebar.radio(
+    "Use:",
+    ["Base corpus (prebuilt FAISS)", "My uploaded PDFs (session-only)"],
+    index=0,
+)
 
-extra_vectorstore = None
+def split_and_clean(docs):
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
+    )
+    chunks = splitter.split_documents(docs)
+    chunks = [d for d in chunks if d.page_content and d.page_content.strip()]
+    chunks = [d for d in chunks if len(d.page_content.strip()) >= MIN_CHARS]
+    return chunks
 
-if uploaded_pdf:
-    # ... inside the `if uploaded_pdf:` block
-    with st.spinner("🔄 Processing uploaded PDF..."):
-        # Save to temp
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(uploaded_pdf.read())
-            tmp_path = tmp_file.name
+# Build vectorstore depending on choice
+vectorstore = None
 
-        # 1) Load with PyMuPDF (handles more PDFs)
-        try:
-            loader = PyMuPDFLoader(tmp_path)
-            pages = loader.load()
-        except Exception as e:
-            st.error(f"Failed to read PDF: {e}")
-            st.stop()
+if data_source == "Base corpus (prebuilt FAISS)":
+    @st.cache_resource
+    def load_base_index():
+        return FAISS.load_local(
+            CORPUS_INDEX, embeddings, allow_dangerous_deserialization=True
+        )
 
-        # 2) Split to chunks
-        splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-        chunks = splitter.split_documents(pages)
-
-        # 3) Filter out empty/whitespace chunks
-        chunks = [d for d in chunks if d.page_content and d.page_content.strip()]
-
-        # Optional: enforce a minimum size to avoid junk fragments
-        chunks = [d for d in chunks if len(d.page_content.strip()) >= MIN_CHARS]
-
-        # 4) Guard: if still empty, explain likely cause (scanned PDF)
-        if not chunks:
-            st.error(
-                "I couldn’t extract any text from that PDF. "
-                "It may be scanned/image-only or encrypted. "
-                "Try another file or run OCR to extract text."
-            )
-            st.stop()
-
-        # 5) Build the vectorstore safely
-        embedder = OpenAIEmbeddings(openai_api_key=user_api_key)
-        try:
-            extra_vectorstore = FAISS.from_documents(chunks, embedder)
-        except Exception as e:
-            st.error(f"Failed to embed uploaded PDF: {e}")
-            st.stop()
-        
-## Merge corpus with user upload (if any)
-if extra_vectorstore:
     try:
-        corpus_vectorstore.merge_from(extra_vectorstore)
+        vectorstore = load_base_index()
+        st.sidebar.success("Loaded base FAISS index.")
     except Exception as e:
-        st.error(f"Failed to merge uploaded PDF into corpus index: {e}")
+        st.sidebar.error(f"Failed to load `{CORPUS_INDEX}`: {e}")
         st.stop()
 
-retriever = corpus_vectorstore.as_retriever()
-    
-## Set up LLM and QA Chain
-llm = ChatOpenAI(model="gpt-5", temperature=1, openai_api_key=user_api_key)
+else:
+    st.sidebar.subheader("Upload one or more PDFs")
+    uploaded_pdfs = st.sidebar.file_uploader(
+        "Select PDF(s)", type="pdf", accept_multiple_files=True
+    )
+
+    if not uploaded_pdfs:
+        st.sidebar.info("Upload at least one PDF to proceed.")
+        st.stop()
+
+    docs = []
+    with st.spinner("Processing uploaded PDFs..."):
+        for f in uploaded_pdfs:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(f.read())
+                tmp_path = tmp.name
+            try:
+                loader = PyMuPDFLoader(tmp_path)
+                pages = loader.load()
+                # tag each page with source filename
+                for p in pages:
+                    p.metadata = {**p.metadata, "source": f.name}
+                docs.extend(pages)
+            except Exception as e:
+                st.sidebar.error(f"Failed to read {f.name}: {e}")
+                st.stop()
+
+        chunks = split_and_clean(docs)
+        if not chunks:
+            st.sidebar.error("No extractable text found in the uploaded PDFs.")
+            st.stop()
+
+        try:
+            vectorstore = FAISS.from_documents(chunks, embeddings)
+            st.sidebar.success("Built a temporary FAISS index from uploads.")
+        except Exception as e:
+            st.sidebar.error(f"Failed to embed uploaded PDFs: {e}")
+            st.stop()
+
+# 4) Retrieval + QA
+retriever = vectorstore.as_retriever()
 qa_chain = RetrievalQA.from_chain_type(
     llm=llm,
     retriever=retriever,
     return_source_documents=True
 )
 
-##Q&A Interface
-st.markdown("### 🧠 Step 4: Ask a Question")
-question = st.text_input("Type your question here:")
-
+# 5) Main page: just the Q&A
+question = st.text_input("🔎 Ask a question about the selected data source:")
 if question:
-    with st.spinner("💬 Thinking..."):
+    with st.spinner("Thinking..."):
         try:
             result = qa_chain(question)
+        except Exception as e:
+            st.error(f"Failed to process your question: {e}")
+        else:
             st.markdown("### 💡 Answer")
             st.write(result["result"])
 
-            with st.expander("📚 Source Chunks"):
+            with st.expander("📚 Source snippets"):
                 for i, doc in enumerate(result["source_documents"]):
-                    st.markdown(f"**Source:** {doc.metadata.get('source', 'unknown')}")
+                    src = doc.metadata.get("source", "unknown")
+                    st.markdown(f"**Source:** {src}")
                     st.write(doc.page_content)
                     st.markdown("---")
-        except Exception as e:
-            st.error(f"❌ Failed to process your question: {e}")
+else:
+    st.caption("Choose your data source in the sidebar, then ask a question here.")
