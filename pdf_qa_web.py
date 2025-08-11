@@ -57,3 +57,24 @@ try:
 except Exception as e:
     st.error(f"❌ Failed to load prebuilt index: {e}")
     st.stop()
+    
+## Optional PDF Upload
+st.markdown("### 📄 Step 3 (Optional): Upload your own PDF to include in Q&A")
+uploaded_pdf = st.file_uploader("Upload a PDF", type="pdf")
+
+extra_vectorstore = None
+
+if uploaded_pdf:
+    with st.spinner("🔄 Processing uploaded PDF..."):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(uploaded_pdf.read())
+            tmp_path = tmp_file.name
+
+        loader = PyPDFLoader(tmp_path)
+        pages = loader.load_and_split()
+
+        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        chunks = splitter.split_documents(pages)
+
+        embedder = OpenAIEmbeddings(openai_api_key=user_api_key)
+        extra_vectorstore = FAISS.from_documents(chunks, embedder)
