@@ -13,7 +13,7 @@ import os
 import tempfile
 import streamlit as st
 from dotenv import dotenv_values
-from langchain.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
@@ -65,24 +65,58 @@ uploaded_pdf = st.file_uploader("Upload a PDF", type="pdf")
 extra_vectorstore = None
 
 if uploaded_pdf:
+    # ... inside the `if uploaded_pdf:` block
     with st.spinner("🔄 Processing uploaded PDF..."):
+        # Save to temp
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(uploaded_pdf.read())
             tmp_path = tmp_file.name
 
-        loader = PyPDFLoader(tmp_path)
-        pages = loader.load_and_split()
+        # 1) Load with PyMuPDF (handles more PDFs)
+        try:
+            loader = PyMuPDFLoader(tmp_path)
+            pages = loader.load()
+        except Exception as e:
+            st.error(f"Failed to read PDF: {e}")
+            st.stop()
 
+        # 2) Split to chunks
         splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
         chunks = splitter.split_documents(pages)
 
+        # 3) Filter out empty/whitespace chunks
+        chunks = [d for d in chunks if d.page_content and d.page_content.strip()]
+
+        # Optional: enforce a minimum size to avoid junk fragments
+        MIN_CHARS = 20
+        chunks = [d for d in chunks if len(d.page_content.strip()) >= MIN_CHARS]
+
+        # 4) Guard: if still empty, explain likely cause (scanned PDF)
+        if not chunks:
+            st.error(
+                "I couldn’t extract any text from that PDF. "
+                "It may be scanned/image-only or encrypted. "
+                "Try another file or run OCR to extract text."
+            )
+            st.stop()
+
+        # 5) Build the vectorstore safely
         embedder = OpenAIEmbeddings(openai_api_key=user_api_key)
-        extra_vectorstore = FAISS.from_documents(chunks, embedder)
+        try:
+            extra_vectorstore = FAISS.from_documents(chunks, embedder)
+        except Exception as e:
+            st.error(f"Failed to embed uploaded PDF: {e}")
+            st.stop()
         
 ## Merge corpus with user upload (if any)
-retriever = corpus_vectorstore.as_retriever()
 if extra_vectorstore:
-    retriever = FAISS.merge_from([corpus_vectorstore, extra_vectorstore]).as_retriever()
+    try:
+        corpus_vectorstore.merge_from(extra_vectorstore)
+    except Exception as e:
+        st.error(f"Failed to merge uploaded PDF into corpus index: {e}")
+        st.stop()
+
+retriever = corpus_vectorstore.as_retriever()
     
 ## Set up LLM and QA Chain
 llm = ChatOpenAI(model="gpt-5", temperature=1, openai_api_key=user_api_key)
@@ -91,3 +125,22 @@ qa_chain = RetrievalQA.from_chain_type(
     retriever=retriever,
     return_source_documents=True
 )
+
+##Q&A Interface
+st.markdown("### 🧠 Step 4: Ask a Question")
+question = st.text_input("Type your question here:")
+
+if question:
+    with st.spinner("💬 Thinking..."):
+        try:
+            result = qa_chain(question)
+            st.markdown("### 💡 Answer")
+            st.write(result["result"])
+
+            with st.expander("📚 Source Chunks"):
+                for i, doc in enumerate(result["source_documents"]):
+                    st.markdown(f"**Source:** {doc.metadata.get('source', 'unknown')}")
+                    st.write(doc.page_content)
+                    st.markdown("---")
+        except Exception as e:
+            st.error(f"❌ Failed to process your question: {e}")
