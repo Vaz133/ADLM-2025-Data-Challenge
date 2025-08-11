@@ -41,3 +41,19 @@ if os.path.exists(default_env_path):
 else:
     st.error(f"❌ .env file not found at: `{default_env_path}`")
     st.stop()
+    
+## Load Pretrained Corpus Index
+st.markdown("### 📚 Step 2: Loading pre-trained PDF corpus...")
+CORPUS_INDEX = "corpus_index"
+
+@st.cache_resource
+def load_corpus_index(api_key):
+    embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+    return FAISS.load_local(CORPUS_INDEX, embeddings, allow_dangerous_deserialization=True)
+
+try:
+    corpus_vectorstore = load_corpus_index(user_api_key)
+    st.success("✅ Corpus loaded.")
+except Exception as e:
+    st.error(f"❌ Failed to load prebuilt index: {e}")
+    st.stop()
