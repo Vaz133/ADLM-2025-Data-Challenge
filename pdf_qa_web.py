@@ -83,3 +83,11 @@ if uploaded_pdf:
 retriever = corpus_vectorstore.as_retriever()
 if extra_vectorstore:
     retriever = FAISS.merge_from([corpus_vectorstore, extra_vectorstore]).as_retriever()
+    
+## Set up LLM and QA Chain
+llm = ChatOpenAI(model="gpt-5", temperature=1, openai_api_key=user_api_key)
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=retriever,
+    return_source_documents=True
+)
