@@ -78,3 +78,8 @@ if uploaded_pdf:
 
         embedder = OpenAIEmbeddings(openai_api_key=user_api_key)
         extra_vectorstore = FAISS.from_documents(chunks, embedder)
+        
+## Merge corpus with user upload (if any)
+retriever = corpus_vectorstore.as_retriever()
+if extra_vectorstore:
+    retriever = FAISS.merge_from([corpus_vectorstore, extra_vectorstore]).as_retriever()
