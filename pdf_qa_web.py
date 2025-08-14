@@ -30,8 +30,9 @@ CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 MIN_CHARS = 20
 
-st.set_page_config(page_title="📚 PDF / DOCX Q&A", layout="centered")
-st.title("📚 PDF / DOCX Q&A")
+st.set_page_config(page_title="🧪 Lab Document Q&A", layout="centered")
+st.title("🧪 Lab Document Q&A")
+st.caption("For internal lab use: quick retrieval and summarization from validated document sets. Avoid PHI unless policy allows.")
 
 # 1) Load API key (local only; nothing stored server-side)
 if os.path.exists(ENV_PATH):
@@ -195,6 +196,8 @@ qa_chain = RetrievalQA.from_chain_type(
 
 # 4) Main page: Q&A
 question = st.text_input("🔎 Ask a question about the selected data source:")
+st.sidebar.markdown("**⚠️ PHI caution:** Follow institutional policy when entering identifiers.")
+top_k = st.sidebar.slider("Top-k evidence chunks", min_value=2, max_value=10, value=4, step=1)
 if question:
     with st.spinner("Thinking..."):
         try:
