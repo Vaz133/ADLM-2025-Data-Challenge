@@ -200,6 +200,16 @@ if "messages" not in st.session_state:
 if "chat_history_tuples" not in st.session_state:
     # ConversationalRetrievalChain expects list[tuple[str, str]] of (human, ai)
     st.session_state.chat_history_tuples = []
+    
+# Reset chat helper
+def reset_chat():
+    st.session_state.messages = [
+        {"role": "assistant", "content": "New chat started. Ask me about your selected documents."}
+    ]
+    st.session_state.chat_history_tuples = []
+
+# Sidebar button
+st.sidebar.button("🧹 New chat", on_click=reset_chat)
 
 # Build a retriever each run so top_k updates immediately
 retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
