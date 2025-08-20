@@ -215,27 +215,32 @@ conv_chain = ConversationalRetrievalChain.from_llm(
     }
 )
 
-# ========================
 # Helpers
-# ========================
-def format_sources(docs):
-    # Deduplicate by (source,page)
+def render_sources(docs):
+    """Render deduped source chunks with preview + expandable full text."""
     seen = set()
-    lines = []
-    for i, d in enumerate(docs, start=1):
+    shown = 0
+    for d in docs:
         src = d.metadata.get("source", "unknown")
         pg = d.metadata.get("page")
         key = (src, pg)
         if key in seen:
             continue
         seen.add(key)
-        label = f"- **{src}**" + (f", p. {pg}" if pg is not None else "")
-        # short preview to keep chat compact
-        preview = d.page_content.strip().replace("\n", " ")
-        if len(preview) > 300:
-            preview = preview[:300] + "…"
-        lines.append(f"{label}\n  \n  > {preview}")
-    return "\n".join(lines) if lines else "_No sources returned._"
+
+        full_text = (d.page_content or "").strip()
+        preview = full_text.replace("\n", " ")
+        short_preview = preview[:300] + ("…" if len(preview) > 300 else "")
+
+        label = f"**{src}**" + (f", p. {pg}" if pg is not None else "")
+        st.markdown(label)
+        st.markdown(f"> {short_preview}")
+        with st.expander("Show full text"):
+            st.write(full_text if full_text else "_(empty)_")
+        st.markdown("---")
+        shown += 1
+    if shown == 0:
+        st.markdown("_No sources returned._")
 
 def reset_chat():
     st.session_state.messages = [
@@ -245,9 +250,7 @@ def reset_chat():
 
 st.sidebar.button("🧹 New chat", on_click=reset_chat)
 
-# ========================
 # Chat UI
-# ========================
 # Render history
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
@@ -271,14 +274,27 @@ if user_msg:
                 })
                 answer = result["answer"]
                 sources = result.get("source_documents", [])
+
                 # render answer
                 st.markdown(answer)
-                # expandable sources
-                with st.expander("📚 Sources"):
-                    st.markdown(format_sources(sources))
-                # update session memory for next turn
+
+                # Per-answer sources with expanders per chunk
+                # Compute a count after dedup for a nicer label
+                _seen = set()
+                _dedup_count = 0
+                for d in sources:
+                    key = (d.metadata.get("source", "unknown"), d.metadata.get("page"))
+                    if key not in _seen:
+                        _seen.add(key)
+                        _dedup_count += 1
+
+                with st.expander(f"📚 Sources ({_dedup_count})", expanded=False):
+                    render_sources(sources)
+
+                # ---- update session-based memory ----
                 st.session_state.chat_history_tuples.append((user_msg, answer))
                 st.session_state.messages.append({"role": "assistant", "content": answer})
+
             except Exception as e:
                 err = f"Failed to process your message: {e}"
                 st.error(err)
