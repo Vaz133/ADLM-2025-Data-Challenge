@@ -242,21 +242,23 @@ def render_sources(docs):
     if shown == 0:
         st.markdown("_No sources returned._")
 
-def reset_chat():
-    st.session_state.messages = [
-        {"role": "assistant", "content": "New chat started. Ask me about your selected documents."}
-    ]
-    st.session_state.chat_history_tuples = []
+def count_dedup_sources(docs):
+    seen = set()
+    for d in docs:
+        key = (d.metadata.get("source", "unknown"), d.metadata.get("page"))
+        seen.add(key)
+    return len(seen)
 
-st.sidebar.button("🧹 New chat", on_click=reset_chat)
-
-# Chat UI
-# Render history
+# Render history (answers + their saved sources)
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
+        if m["role"] == "assistant" and "sources" in m:
+            dedup_n = count_dedup_sources(m["sources"])
+            with st.expander(f"📚 Sources ({dedup_n})", expanded=False):
+                render_sources(m["sources"])
 
-# Input
+# Input & turn handling
 user_msg = st.chat_input("Type your question or follow-up…")
 if user_msg:
     # show user message
@@ -264,7 +266,7 @@ if user_msg:
     with st.chat_message("user"):
         st.markdown(user_msg)
 
-    # run retrieval with conversation memory
+    # assistant turn
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
             try:
@@ -278,22 +280,20 @@ if user_msg:
                 # render answer
                 st.markdown(answer)
 
-                # Per-answer sources with expanders per chunk
-                # Compute a count after dedup for a nicer label
-                _seen = set()
-                _dedup_count = 0
-                for d in sources:
-                    key = (d.metadata.get("source", "unknown"), d.metadata.get("page"))
-                    if key not in _seen:
-                        _seen.add(key)
-                        _dedup_count += 1
-
-                with st.expander(f"📚 Sources ({_dedup_count})", expanded=False):
+                # per-answer sources (also rendered live here)
+                dedup_n = count_dedup_sources(sources)
+                with st.expander(f"📚 Sources ({dedup_n})", expanded=False):
                     render_sources(sources)
 
-                # ---- update session-based memory ----
+                # update session memory (for follow-ups)
                 st.session_state.chat_history_tuples.append((user_msg, answer))
-                st.session_state.messages.append({"role": "assistant", "content": answer})
+
+                # persist answer + sources so they remain visible in history
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": answer,
+                    "sources": sources
+                })
 
             except Exception as e:
                 err = f"Failed to process your message: {e}"
