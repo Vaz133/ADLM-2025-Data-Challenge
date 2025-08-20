@@ -7,9 +7,7 @@ pdf_qa_web.py
 
 '''
 
-# ========================
 # Imports
-# ========================
 import os
 import io
 import zipfile
@@ -25,9 +23,7 @@ from langchain.chat_models import ChatOpenAI
 from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts import ChatPromptTemplate
 
-# ========================
 # Config
-# ========================
 ENV_PATH = ".env"                 # fixed path to env file
 CORPUS_INDEX = "corpus_index"     # folder produced by corpus builder
 CHUNK_SIZE = 500
@@ -38,9 +34,7 @@ st.set_page_config(page_title="🧪 Lab Document Chat", layout="centered")
 st.title("🧪 Lab Document Chat")
 st.caption("For internal lab use: retrieve & discuss validated documents. Avoid PHI unless policy allows.")
 
-# ========================
 # API Key
-# ========================
 if os.path.exists(ENV_PATH):
     load_dotenv(ENV_PATH)
 user_api_key = os.getenv("OPENAI_API_KEY")
@@ -48,14 +42,10 @@ if not user_api_key:
     st.error(f"OPENAI_API_KEY not found. Ensure `{ENV_PATH}` exists with your key.")
     st.stop()
 
-# ========================
 # Shared embeddings
-# ========================
 embeddings = OpenAIEmbeddings(openai_api_key=user_api_key)
 
-# ========================
 # Sidebar: data source
-# ========================
 st.sidebar.header("Data source")
 data_source = st.sidebar.radio(
     "Use:",
@@ -119,9 +109,7 @@ def load_uploaded_file_to_documents(uploaded_file):
         st.sidebar.error(f"Failed to read {name}: {e}")
         return []
 
-# ========================
 # Build vectorstore
-# ========================
 vectorstore = None
 
 if data_source == "Base corpus (prebuilt FAISS)":
@@ -185,9 +173,7 @@ else:  # Upload saved FAISS zip
         st.sidebar.error(f"Failed to load FAISS from zip: {e}")
         st.stop()
 
-# ========================
 # Chat settings & memory
-# ========================
 st.sidebar.markdown("**⚠️ PHI caution:** Follow institutional policy when entering identifiers.")
 top_k = st.sidebar.slider("Top-k evidence chunks", min_value=2, max_value=10, value=4, step=1)
 
@@ -218,9 +204,7 @@ def reset_chat():
 
 st.sidebar.button("🧹 New chat", on_click=reset_chat)
 
-# ========================
 # Prompt builder for length
-# ========================
 def build_length_prompt(length_mode: str) -> ChatPromptTemplate:
     """Return a ChatPromptTemplate that enforces length but still uses bullets when clearer."""
     if length_mode == "Concise (2–3 sentences)":
@@ -257,9 +241,7 @@ prompt = build_length_prompt(length_mode)
 effective_k = top_k if length_mode == "Detailed (2+ paragraphs)" else min(top_k, 3)
 retriever = vectorstore.as_retriever(search_kwargs={"k": effective_k})
 
-# ========================
 # Build chain (GPT-5 has fixed temperature=1)
-# ========================
 conv_chain = ConversationalRetrievalChain.from_llm(
     llm=ChatOpenAI(model="gpt-5", temperature=1, openai_api_key=user_api_key),
     retriever=retriever,
@@ -267,9 +249,7 @@ conv_chain = ConversationalRetrievalChain.from_llm(
     combine_docs_chain_kwargs={"prompt": prompt},
 )
 
-# ========================
 # Helpers
-# ========================
 def render_sources(docs):
     """Render deduped source chunks with preview + expandable full text."""
     seen = set()
@@ -303,9 +283,7 @@ def count_dedup_sources(docs):
         seen.add(key)
     return len(seen)
 
-# ========================
 # Render history (answers + their saved sources)
-# ========================
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
@@ -314,9 +292,7 @@ for m in st.session_state.messages:
             with st.expander(f"📚 Sources ({dedup_n})", expanded=False):
                 render_sources(m["sources"])
 
-# ========================
 # Input & turn handling
-# ========================
 user_msg = st.chat_input("Type your question or follow-up…")
 if user_msg:
     # show user message
