@@ -7,8 +7,9 @@ pdf_qa_web.py
 
 '''
 
-## Import necessary libraries
-
+# ========================
+# Imports
+# ========================
 import os
 import io
 import zipfile
@@ -22,19 +23,24 @@ from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import ConversationalRetrievalChain
+from langchain.prompts import ChatPromptTemplate
 
-## Config
-ENV_PATH = ".env"            # fixed path to env file
-CORPUS_INDEX = "corpus_index"  # folder produced by corpus builder
+# ========================
+# Config
+# ========================
+ENV_PATH = ".env"                 # fixed path to env file
+CORPUS_INDEX = "corpus_index"     # folder produced by corpus builder
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 MIN_CHARS = 20
 
-st.set_page_config(page_title="🧪 Lab Document Q&A", layout="centered")
-st.title("🧪 Lab Document Q&A")
-st.caption("For internal lab use: quick retrieval and summarization from validated document sets. Avoid PHI unless policy allows.")
+st.set_page_config(page_title="🧪 Lab Document Chat", layout="centered")
+st.title("🧪 Lab Document Chat")
+st.caption("For internal lab use: retrieve & discuss validated documents. Avoid PHI unless policy allows.")
 
-# 1) Load API key (local only; nothing stored server-side)
+# ========================
+# API Key
+# ========================
 if os.path.exists(ENV_PATH):
     load_dotenv(ENV_PATH)
 user_api_key = os.getenv("OPENAI_API_KEY")
@@ -42,12 +48,14 @@ if not user_api_key:
     st.error(f"OPENAI_API_KEY not found. Ensure `{ENV_PATH}` exists with your key.")
     st.stop()
 
-    
-# Shared embeddings + LLM
+# ========================
+# Shared embeddings
+# ========================
 embeddings = OpenAIEmbeddings(openai_api_key=user_api_key)
-llm = ChatOpenAI(model="gpt-5", temperature=1, openai_api_key=user_api_key)
-    
-# Sidebar: all data-source UI
+
+# ========================
+# Sidebar: data source
+# ========================
 st.sidebar.header("Data source")
 data_source = st.sidebar.radio(
     "Use:",
@@ -69,7 +77,6 @@ def split_and_clean(docs):
     return chunks
 
 def zip_dir_to_bytes(dir_path: str) -> bytes:
-    """Zip a directory into an in-memory bytes object"""
     memfile = io.BytesIO()
     with zipfile.ZipFile(memfile, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         for root, _, files in os.walk(dir_path):
@@ -81,7 +88,6 @@ def zip_dir_to_bytes(dir_path: str) -> bytes:
     return memfile.read()
 
 def load_faiss_from_zip_bytes(zip_bytes: bytes):
-    """Extract a FAISS zip to a temp dir and load it (session-only)."""
     tmp_dir = tempfile.mkdtemp(prefix="faiss_")
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         zf.extractall(tmp_dir)
@@ -90,16 +96,13 @@ def load_faiss_from_zip_bytes(zip_bytes: bytes):
 
 def load_uploaded_file_to_documents(uploaded_file):
     """
-    Handles PDF (via PyMuPDFLoader) and DOCX (via Docx2txtLoader).
-    Uses a temp file path per upload. Returns list[Document].
+    PDF via PyMuPDFLoader; DOCX via Docx2txtLoader. Returns list[Document].
     """
     name = uploaded_file.name
     suffix = os.path.splitext(name)[1].lower()
-
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
-
     try:
         if suffix == ".pdf":
             loader = PyMuPDFLoader(tmp_path)
@@ -109,7 +112,6 @@ def load_uploaded_file_to_documents(uploaded_file):
             st.sidebar.error(f"Unsupported file type: {suffix}. Please upload PDF or DOCX.")
             return []
         docs = loader.load()
-        # attach filename metadata consistently
         for d in docs:
             d.metadata = {**d.metadata, "source": name}
         return docs
@@ -117,10 +119,11 @@ def load_uploaded_file_to_documents(uploaded_file):
         st.sidebar.error(f"Failed to read {name}: {e}")
         return []
 
-# 2) Build vectorstore depending on choice
+# ========================
+# Build vectorstore
+# ========================
 vectorstore = None
 
-# A) Base corpus (prebuilt)
 if data_source == "Base corpus (prebuilt FAISS)":
     @st.cache_resource
     def load_base_index():
@@ -134,7 +137,6 @@ if data_source == "Base corpus (prebuilt FAISS)":
         st.sidebar.error(f"Failed to load `{CORPUS_INDEX}`: {e}")
         st.stop()
 
-# B) User uploads (PDF or DOCX) — session-only; offer FAISS download
 elif data_source == "My uploaded files (PDF/DOCX, session-only)":
     st.sidebar.subheader("Upload PDF/DOCX file(s)")
     uploaded_files = st.sidebar.file_uploader(
@@ -148,12 +150,10 @@ elif data_source == "My uploaded files (PDF/DOCX, session-only)":
     with st.spinner("Processing uploads..."):
         for f in uploaded_files:
             docs.extend(load_uploaded_file_to_documents(f))
-
         chunks = split_and_clean(docs)
         if not chunks:
             st.sidebar.error("No extractable text found in the uploaded files.")
             st.stop()
-
         try:
             vectorstore = FAISS.from_documents(chunks, embeddings)
             st.sidebar.success("Built a temporary FAISS index from uploads.")
@@ -161,7 +161,7 @@ elif data_source == "My uploaded files (PDF/DOCX, session-only)":
             st.sidebar.error(f"Failed to embed uploaded files: {e}")
             st.stop()
 
-    # Offer a download of this session’s FAISS as a zip (local to the user)
+    # Optional: let user download the temp FAISS
     with tempfile.TemporaryDirectory() as tmp_vs_dir:
         vectorstore.save_local(tmp_vs_dir)
         zip_bytes = zip_dir_to_bytes(tmp_vs_dir)
@@ -172,8 +172,7 @@ elif data_source == "My uploaded files (PDF/DOCX, session-only)":
             mime="application/zip",
         )
 
-# C) User uploads a previously saved FAISS zip (session-only)
-else:
+else:  # Upload saved FAISS zip
     st.sidebar.subheader("Upload your saved FAISS (.zip)")
     zip_upload = st.sidebar.file_uploader("Select a .zip", type="zip")
     if not zip_upload:
@@ -186,46 +185,91 @@ else:
         st.sidebar.error(f"Failed to load FAISS from zip: {e}")
         st.stop()
 
+# ========================
 # Chat settings & memory
+# ========================
 st.sidebar.markdown("**⚠️ PHI caution:** Follow institutional policy when entering identifiers.")
 top_k = st.sidebar.slider("Top-k evidence chunks", min_value=2, max_value=10, value=4, step=1)
 
-# Maintain per-session chat history (NOT persisted)
+# Answer length control
+length_mode = st.sidebar.selectbox(
+    "Answer length",
+    [
+        "Concise (2–3 sentences)",
+        "Balanced (1–2 paragraphs)",
+        "Detailed (2+ paragraphs)",
+    ],
+    index=1,
+)
+
 if "messages" not in st.session_state:
-    # seed with a system-style instruction (kept out of the model call, but rendered to user for context)
     st.session_state.messages = [
         {"role": "assistant", "content": "Hi! Ask me about your selected documents and I’ll cite sources. Follow-ups are welcome."}
     ]
-
 if "chat_history_tuples" not in st.session_state:
-    # ConversationalRetrievalChain expects list[tuple[str, str]] of (human, ai)
     st.session_state.chat_history_tuples = []
-    
-# Reset chat helper
+
+# Reset chat helper + button
 def reset_chat():
     st.session_state.messages = [
         {"role": "assistant", "content": "New chat started. Ask me about your selected documents."}
     ]
     st.session_state.chat_history_tuples = []
 
-# Sidebar button
 st.sidebar.button("🧹 New chat", on_click=reset_chat)
 
-# Build a retriever each run so top_k updates immediately
-retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
+# ========================
+# Prompt builder for length
+# ========================
+def build_length_prompt(length_mode: str) -> ChatPromptTemplate:
+    """Return a ChatPromptTemplate that enforces length but still uses bullets when clearer."""
+    if length_mode == "Concise (2–3 sentences)":
+        instruction = (
+            "Keep it brief: 2–3 sentences **or** 3–5 short bullets (≤15 words each). "
+            "Choose whichever is clearer."
+        )
+    elif length_mode == "Balanced (1–2 paragraphs)":
+        instruction = (
+            "Aim for 1–2 short paragraphs. If listing steps/findings/reasons, include a short "
+            "bullet list after an opening sentence."
+        )
+    else:  # Detailed (2+ paragraphs)
+        instruction = (
+            "Provide depth in 2+ paragraphs. Use Markdown headings and bullet/numbered lists "
+            "for steps, pros/cons, or key takeaways. Avoid fluff."
+        )
 
-# Conversational Retrieval chain (returns 'answer' + 'source_documents')
+    template = (
+        "You are a lab-focused assistant. Use only the provided context to answer.\n"
+        "Respond in **Markdown**. When enumerating items or steps, prefer concise bullet or numbered lists. "
+        "Use tables when comparing items (keep them compact). "
+        "Cite only what is supported by the context; if context is insufficient, say so briefly. "
+        "Avoid PHI in your response.\n\n"
+        f"{instruction}\n\n"
+        "Question:\n{question}\n\n"
+        "Context:\n{context}"
+    )
+    return ChatPromptTemplate.from_template(template)
+
+prompt = build_length_prompt(length_mode)
+
+# Optionally limit retrieved context when aiming for brevity
+effective_k = top_k if length_mode == "Detailed (2+ paragraphs)" else min(top_k, 3)
+retriever = vectorstore.as_retriever(search_kwargs={"k": effective_k})
+
+# ========================
+# Build chain (GPT-5 has fixed temperature=1)
+# ========================
 conv_chain = ConversationalRetrievalChain.from_llm(
     llm=ChatOpenAI(model="gpt-5", temperature=1, openai_api_key=user_api_key),
     retriever=retriever,
     return_source_documents=True,
-    # You can tweak this prompt to be more lab-specific:
-    combine_docs_chain_kwargs={
-        "prompt": None  # use default; swap in a lab-focused prompt if desired
-    }
+    combine_docs_chain_kwargs={"prompt": prompt},
 )
 
+# ========================
 # Helpers
+# ========================
 def render_sources(docs):
     """Render deduped source chunks with preview + expandable full text."""
     seen = set()
@@ -259,7 +303,9 @@ def count_dedup_sources(docs):
         seen.add(key)
     return len(seen)
 
+# ========================
 # Render history (answers + their saved sources)
+# ========================
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
@@ -268,7 +314,9 @@ for m in st.session_state.messages:
             with st.expander(f"📚 Sources ({dedup_n})", expanded=False):
                 render_sources(m["sources"])
 
+# ========================
 # Input & turn handling
+# ========================
 user_msg = st.chat_input("Type your question or follow-up…")
 if user_msg:
     # show user message
