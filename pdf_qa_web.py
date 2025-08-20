@@ -21,7 +21,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 from langchain.chat_models import ChatOpenAI
-from langchain.chains import RetrievalQA
+from langchain.chains import ConversationalRetrievalChain
 
 ## Config
 ENV_PATH = ".env"            # fixed path to env file
@@ -186,37 +186,100 @@ else:
         st.sidebar.error(f"Failed to load FAISS from zip: {e}")
         st.stop()
 
-# 3) Retrieval + QA (uses whichever vectorstore was selected)
-retriever = vectorstore.as_retriever()
-qa_chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=retriever,
-    return_source_documents=True
-)
-
-# 4) Main page: Q&A
-question = st.text_input("🔎 Ask a question about the selected data source:")
+# Chat settings & memory
 st.sidebar.markdown("**⚠️ PHI caution:** Follow institutional policy when entering identifiers.")
 top_k = st.sidebar.slider("Top-k evidence chunks", min_value=2, max_value=10, value=4, step=1)
-if question:
-    with st.spinner("Thinking..."):
-        try:
-            result = qa_chain(question)
-        except Exception as e:
-            st.error(f"Failed to process your question: {e}")
-        else:
-            st.markdown("### 💡 Answer")
-            st.write(result["result"])
 
-            with st.expander("📚 Source snippets"):
-                for i, doc in enumerate(result["source_documents"]):
-                    src = doc.metadata.get("source", "unknown")
-                    pg = doc.metadata.get("page")
-                    label = f"**Source:** {src}"
-                    if pg:
-                        label += f" — page {pg}"
-                    st.markdown(label)
-                    st.write(doc.page_content)
-                    st.markdown("---")
-else:
-    st.caption("Choose your data source in the sidebar, then ask a question here.")
+# Maintain per-session chat history (NOT persisted)
+if "messages" not in st.session_state:
+    # seed with a system-style instruction (kept out of the model call, but rendered to user for context)
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Hi! Ask me about your selected documents and I’ll cite sources. Follow-ups are welcome."}
+    ]
+
+if "chat_history_tuples" not in st.session_state:
+    # ConversationalRetrievalChain expects list[tuple[str, str]] of (human, ai)
+    st.session_state.chat_history_tuples = []
+
+# Build a retriever each run so top_k updates immediately
+retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
+
+# Conversational Retrieval chain (returns 'answer' + 'source_documents')
+conv_chain = ConversationalRetrievalChain.from_llm(
+    llm=ChatOpenAI(model="gpt-5", temperature=1, openai_api_key=user_api_key),
+    retriever=retriever,
+    return_source_documents=True,
+    # You can tweak this prompt to be more lab-specific:
+    combine_docs_chain_kwargs={
+        "prompt": None  # use default; swap in a lab-focused prompt if desired
+    }
+)
+
+# ========================
+# Helpers
+# ========================
+def format_sources(docs):
+    # Deduplicate by (source,page)
+    seen = set()
+    lines = []
+    for i, d in enumerate(docs, start=1):
+        src = d.metadata.get("source", "unknown")
+        pg = d.metadata.get("page")
+        key = (src, pg)
+        if key in seen:
+            continue
+        seen.add(key)
+        label = f"- **{src}**" + (f", p. {pg}" if pg is not None else "")
+        # short preview to keep chat compact
+        preview = d.page_content.strip().replace("\n", " ")
+        if len(preview) > 300:
+            preview = preview[:300] + "…"
+        lines.append(f"{label}\n  \n  > {preview}")
+    return "\n".join(lines) if lines else "_No sources returned._"
+
+def reset_chat():
+    st.session_state.messages = [
+        {"role": "assistant", "content": "New chat started. Ask me about your selected documents."}
+    ]
+    st.session_state.chat_history_tuples = []
+
+st.sidebar.button("🧹 New chat", on_click=reset_chat)
+
+# ========================
+# Chat UI
+# ========================
+# Render history
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
+
+# Input
+user_msg = st.chat_input("Type your question or follow-up…")
+if user_msg:
+    # show user message
+    st.session_state.messages.append({"role": "user", "content": user_msg})
+    with st.chat_message("user"):
+        st.markdown(user_msg)
+
+    # run retrieval with conversation memory
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking…"):
+            try:
+                result = conv_chain({
+                    "question": user_msg,
+                    "chat_history": st.session_state.chat_history_tuples
+                })
+                answer = result["answer"]
+                sources = result.get("source_documents", [])
+                # render answer
+                st.markdown(answer)
+                # expandable sources
+                with st.expander("📚 Sources"):
+                    st.markdown(format_sources(sources))
+                # update session memory for next turn
+                st.session_state.chat_history_tuples.append((user_msg, answer))
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+            except Exception as e:
+                err = f"Failed to process your message: {e}"
+                st.error(err)
+                st.session_state.messages.append({"role": "assistant", "content": err})
